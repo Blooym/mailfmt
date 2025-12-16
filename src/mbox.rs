@@ -151,7 +151,6 @@ impl<I: Iterator<Item = io::Result<String>>> MboxParser<I> {
                             return Some(Ok(email_data));
                         } else {
                             sep_found = true;
-                            continue;
                         }
                     } else if sep_found {
                         email_data.push(line);
