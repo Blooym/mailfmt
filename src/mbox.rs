@@ -5,6 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::{
     fs::{self, File},
     io::{self, BufRead, BufReader, BufWriter, Write},
+    iter::Peekable,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -124,15 +125,15 @@ impl ConvertToEmlCommand {
     }
 }
 
-struct MboxParser<I> {
-    lines: I,
+struct MboxParser<I: Iterator<Item = io::Result<String>>> {
+    lines: Peekable<I>,
     finished: bool,
 }
 
 impl<I: Iterator<Item = io::Result<String>>> MboxParser<I> {
     fn new(lines: I) -> Self {
         Self {
-            lines,
+            lines: lines.peekable(),
             finished: false,
         }
     }
@@ -141,24 +142,32 @@ impl<I: Iterator<Item = io::Result<String>>> MboxParser<I> {
         if self.finished {
             return None;
         }
+
+        while let Some(Ok(line)) = self.lines.peek() {
+            if line.starts_with("From ") {
+                self.lines.next();
+                break;
+            }
+            self.lines.next();
+        }
+
         let mut email_data = Vec::new();
-        let mut sep_found = false;
-        for line in self.lines.by_ref() {
-            match line {
+        while let Some(line_result) = self.lines.peek() {
+            match line_result {
                 Ok(line) => {
                     if line.starts_with("From ") {
-                        if sep_found {
-                            return Some(Ok(email_data));
-                        } else {
-                            sep_found = true;
-                        }
-                    } else if sep_found {
+                        return Some(Ok(email_data));
+                    }
+                    if let Some(Ok(line)) = self.lines.next() {
                         email_data.push(line);
                     }
                 }
-                Err(e) => {
+                Err(_) => {
                     self.finished = true;
-                    return Some(Err(e.into()));
+                    return self
+                        .lines
+                        .next()
+                        .map(|r| r.map(|_| email_data).map_err(Into::into));
                 }
             }
         }
