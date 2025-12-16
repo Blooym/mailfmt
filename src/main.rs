@@ -5,7 +5,7 @@ use crate::{eml::ConvertToMboxCommand, mbox::ConvertToEmlCommand};
 use clap::Parser;
 use std::path::PathBuf;
 
-/// A simple set of email utilities to make life simpler.
+/// A simple and quick bidirectional converter between mbox and eml formats.
 #[derive(Parser)]
 #[clap(about, long_about, version, author)]
 struct Arguments {
