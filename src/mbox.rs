@@ -12,9 +12,9 @@ use std::{
 /// Convert a single .mbox file to an extracted directory of .eml files.
 #[derive(Parser)]
 pub struct ConvertToEmlCommand {
+    #[arg(value_parser = validate_output_file)]
     input_file: PathBuf,
 
-    #[arg(value_parser = validate_output_file)]
     output_directory: PathBuf,
 
     /// Replace any existing eml files in the given directory with new ones if they overlap.
