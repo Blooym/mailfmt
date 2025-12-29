@@ -1,5 +1,6 @@
 use crate::validate_output_file;
 use anyhow::{Context, Result, bail};
+use chrono::DateTime;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::{
@@ -26,7 +27,15 @@ impl ConvertToMboxCommand {
         Self::eml_to_mbox(&self.input_directory, &self.output_file, self.overwrite)
     }
 
-    fn eml_to_mbox(input_dir: &Path, output_file: &Path, overwrite: bool) -> anyhow::Result<()> {
+    fn get_header_value<'a>(content: &'a str, header_name: &str) -> Option<&'a str> {
+        let prefix = format!("{}:", header_name.to_lowercase());
+        content
+            .lines()
+            .find(|line| line.to_lowercase().starts_with(&prefix))
+            .map(|line| line[prefix.len()..].trim())
+    }
+
+    fn eml_to_mbox(input_dir: &Path, output_file: &Path, overwrite: bool) -> Result<()> {
         if output_file.exists() && !overwrite {
             bail!(
                 "File already exists at {:?}. Use the --overwrite flag to replace it.",
@@ -79,7 +88,7 @@ impl ConvertToMboxCommand {
         Ok(())
     }
 
-    fn find_eml_files(dir: &Path, files: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    fn find_eml_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         for entry in
             fs::read_dir(dir).with_context(|| format!("failed to read directory at {dir:?}"))?
         {
@@ -93,41 +102,43 @@ impl ConvertToMboxCommand {
         Ok(())
     }
 
-    fn process_eml_file(eml_file: &Path, output: &mut File) -> anyhow::Result<()> {
+    fn process_eml_file(eml_file: &Path, output: &mut File) -> Result<()> {
         let content = fs::read_to_string(eml_file)
             .with_context(|| format!("failed to read eml file at {eml_file:?}"))?;
-        let from_line = content
-            .lines()
-            .find(|line| line.to_lowercase().starts_with("from:"))
-            .and_then(|line| {
-                let from_addr = line[5..].trim();
-                if let Some(start) = from_addr.find('<') {
-                    from_addr
-                        .find('>')
-                        .map(|end| from_addr[start + 1..end].to_string())
+
+        let from_addr = Self::get_header_value(&content, "from")
+            .and_then(|value| {
+                if let Some(start) = value.find('<') {
+                    value.find('>').map(|end| &value[start + 1..end])
                 } else {
-                    Some(from_addr.to_string())
+                    Some(value)
                 }
             })
-            .map(|email| format!("From {} Mon Jan 01 00:00:00 2024", email))
-            .unwrap_or_else(|| "From unknown@example.com Mon Jan 01 00:00:00 2024".to_string());
+            .unwrap_or("unknown@example.com");
 
-        writeln!(output, "{}", from_line).context("failed to write line to mbox output file")?;
-        write!(output, "{}", content).context("failed to write line to mbox output file")?;
+        let date_str = Self::get_header_value(&content, "date")
+            .and_then(|value| {
+                DateTime::parse_from_rfc2822(value)
+                    .or_else(|_| DateTime::parse_from_rfc3339(value))
+                    .ok()
+                    .map(|dt| dt.format("%a %b %d %H:%M:%S %Y").to_string())
+            })
+            .unwrap_or_else(|| "Mon Jan 01 00:00:00 2024".to_string());
+
+        writeln!(output, "From {} {}", from_addr, date_str)
+            .context("failed to write from line to mbox output file")?;
+        write!(output, "{}", content).context("failed to write content to mbox output file")?;
 
         match content.as_bytes() {
             b if b.ends_with(b"\n\n") => {}
-            b if b.ends_with(b"\n") => {
-                writeln!(output).context("failed to write line to mbox output file")?
-            }
+            b if b.ends_with(b"\n") => writeln!(output)?,
             _ => {
-                writeln!(output).context("failed to write line to mbox output file")?;
-                writeln!(output).context("failed to write line to mbox output file")?;
+                writeln!(output)?;
+                writeln!(output)?;
             }
         }
 
         output.flush()?;
-
         Ok(())
     }
 }

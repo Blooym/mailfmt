@@ -18,7 +18,7 @@ pub struct ConvertToEmlCommand {
 
     output_directory: PathBuf,
 
-    /// Replace any existing eml files in the given directory with new ones if they overlap.
+    /// Replace any existing eml files in the given directory with new ones if they overlap. Will not delete files that do not overlap.
     #[clap(long = "overwrite")]
     overwrite: bool,
 }
@@ -26,6 +26,14 @@ pub struct ConvertToEmlCommand {
 impl ConvertToEmlCommand {
     pub fn run(&self) -> Result<()> {
         Self::mbox_to_eml(&self.input_file, &self.output_directory, self.overwrite)
+    }
+
+    fn get_header_value_from_lines<'a>(lines: &'a [String], header_name: &str) -> Option<&'a str> {
+        let prefix = format!("{}:", header_name.to_lowercase());
+        lines
+            .iter()
+            .find(|line| line.to_lowercase().starts_with(&prefix))
+            .map(|line| line[prefix.len()..].trim())
     }
 
     fn mbox_to_eml(input_file: &Path, output_dir: &Path, overwrite: bool) -> Result<()> {
@@ -38,6 +46,7 @@ impl ConvertToEmlCommand {
                 output_dir
             );
         }
+
         fs::create_dir_all(output_dir)
             .with_context(|| format!("failed to create output directory at {output_dir:?}"))?;
 
@@ -46,6 +55,7 @@ impl ConvertToEmlCommand {
                 File::open(input_file)
                     .with_context(|| format!("failed to open mbox file at {input_file:?}"))?,
             );
+
             let pb = ProgressBar::new_spinner();
             pb.set_style(
                 ProgressStyle::default_spinner()
@@ -56,10 +66,13 @@ impl ConvertToEmlCommand {
 
             let mut parser = MboxParser::new(reader.lines());
             let (mut converted, mut errors) = (0, 0);
+
             while let Some(email_result) = parser.next_message() {
                 match email_result {
                     Ok(email) => {
-                        let subject = Self::extract_subject(&email);
+                        let subject = Self::get_header_value_from_lines(&email, "subject")
+                            .filter(|s| !s.is_empty())
+                            .map(sanitize_filename::sanitize);
                         match Self::save_eml_file(output_dir, converted, subject, &email) {
                             Ok(()) => converted += 1,
                             Err(e) => {
@@ -88,19 +101,6 @@ impl ConvertToEmlCommand {
         Ok(())
     }
 
-    fn extract_subject(content: &[String]) -> Option<String> {
-        for line in content {
-            if line.to_lowercase().starts_with("subject:") {
-                let subject = line[8..].trim();
-                if subject.is_empty() {
-                    return None;
-                }
-                return Some(sanitize_filename::sanitize(subject));
-            }
-        }
-        None
-    }
-
     fn save_eml_file(
         output_dir: &Path,
         index: usize,
@@ -113,13 +113,16 @@ impl ConvertToEmlCommand {
             format!("{:04}.eml", index)
         };
         let filepath = output_dir.join(filename);
+
         let mut file = BufWriter::new(
             File::create(&filepath)
                 .with_context(|| format!("failed to create eml file at {filepath:?}"))?,
         );
+
         for line in content {
             writeln!(file, "{}", line)?;
         }
+
         file.flush()?;
         Ok(())
     }
@@ -143,6 +146,7 @@ impl<I: Iterator<Item = io::Result<String>>> MboxParser<I> {
             return None;
         }
 
+        // Skip to next "From " line
         while let Some(Ok(line)) = self.lines.peek() {
             if line.starts_with("From ") {
                 self.lines.next();
@@ -152,12 +156,13 @@ impl<I: Iterator<Item = io::Result<String>>> MboxParser<I> {
         }
 
         let mut email_data = Vec::new();
+
         while let Some(line_result) = self.lines.peek() {
             match line_result {
-                Ok(line) => {
-                    if line.starts_with("From ") {
-                        return Some(Ok(email_data));
-                    }
+                Ok(line) if line.starts_with("From ") => {
+                    return Some(Ok(email_data));
+                }
+                Ok(_) => {
                     if let Some(Ok(line)) = self.lines.next() {
                         email_data.push(line);
                     }
@@ -171,11 +176,12 @@ impl<I: Iterator<Item = io::Result<String>>> MboxParser<I> {
                 }
             }
         }
+
         self.finished = true;
-        if !email_data.is_empty() {
-            Some(Ok(email_data))
-        } else {
+        if email_data.is_empty() {
             None
+        } else {
+            Some(Ok(email_data))
         }
     }
 }

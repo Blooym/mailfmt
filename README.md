@@ -7,7 +7,7 @@ A simple and quick bidirectional converter between mbox and eml formats.
 
 ## Installation
 
-Ensure you have [Rust](https://www.rust-lang.org/tools/install) installed, then run 
+Ensure you have [Rust](https://www.rust-lang.org/tools/install) installed, then run
 
 ```
 cargo install --git https://codeberg.org/Blooym/mailfmt.git
